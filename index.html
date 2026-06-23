@@ -255,37 +255,55 @@ getaddr:
 <pre><code>
         [bits 32]
 
-x        dq 1.5           ; Przykładowy x typu double (dq = define quadword = 8 bajtów)
-trzy     dd 3             ; Stała całkowita 3
+; f(x) = x - 3*sin(x)
+x        equ __?float64?__(1.5)  ; Przykładowy argument x
 
-         mov ebp, ebx     ; Wskaźnik API
-
-         ; --- OBLICZENIA FPU ---
-         fld qword [x]    ; Wrzucamy 'x' na stos FPU (st0 = x)
-         fld st0          ; Kopiujemy szczyt stosu (st0 = x, st1 = x)
-         
-         fsin             ; Liczymy sinus z st0 (st0 = sin(x), st1 = x)
-         
-         fild dword [trzy]; Wrzucamy całkowite 3 (st0 = 3, st1 = sin(x), st2 = x)
-         fmulp st1, st0   ; Mnożymy i zdejmujemy: st0 = 3 * sin(x), st1 = x
-         
-         fsubp st1, st0   ; Odejmujemy st1 - st0 i zdejmujemy: st0 = x - 3*sin(x)
-
-         ; --- WYPISYWANIE DOUBLE ---
-         ; Uwaga: funkcja printf z "%f" oczekuje, że double zajmie 8 bajtów na stosie!
-         sub esp, 8       ; Robimy 8 bajtów wolnego miejsca na zwykłym stosie procesora
-         fstp qword [esp] ; Zdejmujemy wynik z koprocesora i zapisujemy go w tym wolnym miejscu
-
+;        1. Umiesc dane w pamieci procesu i je pomin
          call getaddr
+
+addr_x   dq x       ; Zmienna x
+addr_3   dq 3.0     ; Stala 3.0 (leży w pamięci pod adresem: addr_x + 8)
+
+getaddr:
+;        esp -> [addr_x][ret]
+
+;        2. Zaladuj adres danych do EBP
+         mov ebp, [esp]  ; ebp = wskaźnik na nasze zmienne
+
+         finit           ; fpu init
+
+;        3. Wykonaj obliczenia przy pomocy FPU
+         fld qword [ebp]    ; st0 = x
+         fld st0            ; Kopiujemy szczyt: st0 = x, st1 = x
+         
+         fsin               ; Liczymy sinus: st0 = sin(x), st1 = x
+         
+         ; Mnożymy od razu przez 3.0 leżące w pamięci pod [ebp+8]
+         fmul qword [ebp+8] ; st0 = 3.0 * sin(x), st1 = x
+         
+         ; Mamy teraz na stosie: st0 = 3*sin(x) oraz st1 = x.
+         ; Wzór to (x - 3*sin(x)), czyli od st1 odejmujemy st0.
+         ; Używamy fsubp, które odejmuje st0 od st1, zapisuje wynik w st1 i zdejmuje szczyt stosu.
+         fsubp st1, st0     ; Po tej operacji nowy st0 = x - 3*sin(x)
+
+;        4. Zapisz dane ze stosu FPU do pamieci
+         sub esp, 4         ; Robimy miejsce (4 bajty z call + te 4 = 8 bajtów na double)
+         
+;        esp -> [ ][ ][ret]
+         fstp qword [esp]   ; Zapisujemy calkowity wynik na stos
+
+;        5. Wypisywanie
+         call getaddr2
 format:
          db "f(x) = %f", 0xA, 0
-getaddr:
+getaddr2:
 
-         call [ebp+3*4]   ; printf(format, x_double)
-         add esp, 12      ; Czyszczenie: 8 bajtów za double + 4 bajty za wskaźnik 'format'
+;        esp -> [format][fl][fh][ret]
+         call [ebx+3*4]  ; printf(format, f)
+         add esp, 3*4    ; Czyszczenie stosu ze wskaźnika i liczby double (12 bajtów)
 
-         push 0
-         call [ebp+0*4]   ; exit(0) 
+         push 0          
+         call [ebx+0*4]  ; exit(0)
 </code></pre>
 
 <h1>Zadania z Asemblera G2</h1>
@@ -497,41 +515,54 @@ getaddr:
 <pre><code>
         [bits 32]
 
-x        dq 0.0          ; Wpiszmy 0.0, żeby łatwo sprawdzić. 5*cos(0) - 0 = 5*1 - 0 = 5.0
-piec     dd 5            ; Stała całkowita do mnożenia
+; f(x) = 5*cos(x) - x
+x        equ __?float64?__(0.0)  ; Testujemy dla x=0 (wynik powinien byc 5.0)
 
-         mov ebp, ebx
-
-         ; --- OBLICZENIA FPU ---
-         fld qword [x]    ; Wrzucamy x (st0 = x)
-         fld st0          ; Kopiujemy szczyt (st0 = x, st1 = x)
-         
-         fcos             ; Liczymy kosinus (st0 = cos(x), st1 = x)
-         
-         fild dword [piec]; (st0 = 5, st1 = cos(x), st2 = x)
-         fmulp st1, st0   ; Mnożymy i zdejmujemy (st0 = 5*cos(x), st1 = x)
-         
-         ; Mamy st0 = 5*cos(x) oraz st1 = x. 
-         ; Chcemy wynik (st0 - st1) wrzucić do st1 i zdjąć szczyt. Użyjemy fsubrp (reverse subtract).
-         fsubrp st1, st0  ; Wykonuje st1 = st0 - st1, po czym ściąga szczyt.
-                          ; Teraz nowy st0 to 5*cos(x) - x.
-
-         ; --- WYPISYWANIE DOUBLE ---
-         sub esp, 8       ; Przygotowanie miejsca na printf
-         fstp qword [esp] 
-
+;        1. Umiesc dane w pamieci procesu i je pomin
          call getaddr
+
+addr_x   dq x       ; Zmienna x
+addr_5   dq 5.0     ; Stala 5.0 (adres = addr_x + 8 bajtow)
+
+getaddr:
+;        esp -> [addr_x][ret]
+
+;        2. Zaladuj adres do EBP
+         mov ebp, [esp]  ; ebp = adres naszych stalych
+
+         finit           ; fpu init
+
+;        3. Obliczenia na FPU
+         fld qword [ebp]    ; st0 = x
+         fld st0            ; Kopiujemy: st0 = x, st1 = x
+         
+         fcos               ; Liczymy kosinus: st0 = cos(x), st1 = x
+         
+         ; Mnożymy od razu przez 5.0 leżące w pamięci pod [ebp+8]
+         fmul qword [ebp+8] ; st0 = 5 * cos(x), st1 = x
+         
+         ; Odejmowanie odwrotne: (st0 - st1) -> do st1 i zdejmij ze stosu
+         fsubrp st1, st0    ; st0 = 5*cos(x) - x
+
+;        4. Zapisz dane ze stosu FPU do pamieci
+         sub esp, 4         ; Robimy miejsce (4 bajty z [addr_x] + te 4 = 8 bajtów)
+         
+;        esp -> [ ][ ][ret] 
+         fstp qword [esp]   ; Zapisujemy calego double (8 bajtow) na stos
+
+;        5. Wypisywanie
+         call getaddr2
 format:
          db "f(x) = %f", 0xA, 0
-getaddr:
+getaddr2:
 
-         call [ebp+3*4]   ; printf
-         add esp, 12      ; 8 bajtów (double) + 4 bajty (wsk. na format)
+;        esp -> [format][fl][fh][ret]
+         call [ebx+3*4]  ; printf
+         add esp, 3*4    ; Czyszczenie 12 bajtów ze stosu
 
-         push 0
-         call [ebp+0*4]   ; exit(0) 
+         push 0          
+         call [ebx+0*4]  ; exit(0)
 </code></pre>
-
 
 </div>
 
